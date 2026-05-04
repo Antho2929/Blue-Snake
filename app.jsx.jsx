@@ -1,0 +1,1274 @@
+import { useState, useEffect, useCallback } from "react";
+
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
+const CHECKLIST_ITEMS = [
+  { id: "water", label: "3L d'eau", icon: "💧" },
+  { id: "shake", label: "Shake protéine + créatine", icon: "🥤" },
+  { id: "protein", label: "150g de protéines", icon: "🥩" },
+  { id: "training", label: "Séance gym ou cardio", icon: "🏋️" },
+  { id: "noJunk", label: "Zéro malbouffe", icon: "🚫" },
+  { id: "noAlcohol", label: "Zéro alcool", icon: "🚭" },
+];
+
+const TROPHIES = [
+  { streak: 1,   name: "Artémis",     title: "Déesse de la Chasse",       emoji: "🏹", color: "#60a5fa" },
+  { streak: 5,   name: "Hermès",      title: "Messager des Dieux",         emoji: "⚡", color: "#34d399" },
+  { streak: 10,  name: "Arès",        title: "Dieu de la Guerre",          emoji: "⚔️", color: "#f87171" },
+  { streak: 25,  name: "Poséidon",    title: "Seigneur des Mers",          emoji: "🔱", color: "#38bdf8" },
+  { streak: 50,  name: "Athéna",      title: "Déesse de la Sagesse",       emoji: "🦉", color: "#a78bfa" },
+  { streak: 75,  name: "Apollon",     title: "Dieu du Soleil",             emoji: "☀️", color: "#fbbf24" },
+  { streak: 100, name: "Zeus",        title: "Roi de l'Olympe",            emoji: "⚡", color: "#f59e0b" },
+  { streak: 150, name: "Héraclès",    title: "Le Héros Immortel",          emoji: "🦁", color: "#fb923c" },
+  { streak: 200, name: "Prométhée",   title: "Porteur du Feu Sacré",       emoji: "🔥", color: "#ef4444" },
+  { streak: 365, name: "Chronos",     title: "Maître du Temps Infini",     emoji: "⏳", color: "#e879f9" },
+];
+
+const WORKOUT_TYPES = ["Dos / Biceps", "Chest / Triceps / Épaules", "Jambes", "Avant-bras / Trapèze", "HIIT", "Course / Marche", "Natation", "Autre"];
+
+// ─── STORAGE HELPERS ─────────────────────────────────────────────────────────
+const STORAGE_KEY = "ac_fitness_v2";
+const loadData = () => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+};
+const saveData = (data) => {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+};
+
+const defaultState = () => ({
+  streak: 0,
+  flameBroken: false,   // true = blue flame (missed 1 day)
+  lastCompletedDate: null,
+  lastCheckedDate: null,
+  dailyChecks: {},      // { "2024-01-15": { water: true, ... } }
+  workouts: [],         // [{ id, date, type, notes, km, calories, duration }]
+  weeklyStats: {},      // { "2024-W03": { km: 0, calories: 0 } }
+  unlockedTrophies: [],
+});
+
+// ─── DATE HELPERS ─────────────────────────────────────────────────────────────
+const today = () => new Date().toISOString().split("T")[0];
+const getWeekKey = (dateStr) => {
+  const d = new Date(dateStr);
+  const jan1 = new Date(d.getFullYear(), 0, 1);
+  const weekNum = Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7);
+  return `${d.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+};
+const formatDate = (dateStr) => {
+  if (!dateStr) return "";
+  const d = new Date(dateStr + "T12:00:00");
+  return d.toLocaleDateString("fr-CA", { weekday: "short", month: "short", day: "numeric" });
+};
+const daysBetween = (a, b) => {
+  if (!a || !b) return null;
+  return Math.round((new Date(b) - new Date(a)) / 86400000);
+};
+
+// ─── SNAKE SVG ────────────────────────────────────────────────────────────────
+const SnakeLogo = () => (
+  <svg viewBox="0 0 120 120" className="snake-svg" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="snakeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stopColor="#1e40af" />
+        <stop offset="50%" stopColor="#3b82f6" />
+        <stop offset="100%" stopColor="#60a5fa" />
+      </linearGradient>
+      <filter id="glow">
+        <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+        <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    {/* Snake body - coiled */}
+    <path d="M60 95 Q85 90 88 72 Q91 54 72 50 Q53 46 50 62 Q47 78 65 80 Q80 82 80 70 Q80 58 68 57"
+      stroke="url(#snakeGrad)" strokeWidth="9" fill="none" strokeLinecap="round" filter="url(#glow)" />
+    {/* Head */}
+    <ellipse cx="64" cy="52" rx="10" ry="7" fill="#1d4ed8" filter="url(#glow)" />
+    {/* Eyes */}
+    <circle cx="60" cy="50" r="2" fill="#60a5fa" />
+    <circle cx="68" cy="50" r="2" fill="#60a5fa" />
+    <circle cx="60.5" cy="50" r="0.8" fill="#fff" />
+    <circle cx="68.5" cy="50" r="0.8" fill="#fff" />
+    {/* Tongue */}
+    <path d="M64 58 L64 64 M64 64 L61 68 M64 64 L67 68" stroke="#ef4444" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+    {/* Scales hint */}
+    <path d="M70 65 Q74 63 76 67" stroke="#3b82f6" strokeWidth="1.5" fill="none" opacity="0.6"/>
+    <path d="M66 74 Q70 72 73 76" stroke="#3b82f6" strokeWidth="1.5" fill="none" opacity="0.6"/>
+  </svg>
+);
+
+// ─── FLAME COMPONENT ─────────────────────────────────────────────────────────
+const Flame = ({ streak, broken }) => {
+  const color1 = broken ? "#93c5fd" : "#f97316";
+  const color2 = broken ? "#3b82f6" : "#ef4444";
+  const color3 = broken ? "#1d4ed8" : "#fbbf24";
+  return (
+    <div className="flame-container">
+      <svg viewBox="0 0 60 80" className="flame-svg" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id={`fg${broken}`} cx="50%" cy="70%" r="60%">
+            <stop offset="0%" stopColor={color3} stopOpacity="0.9" />
+            <stop offset="50%" stopColor={color1} />
+            <stop offset="100%" stopColor={color2} stopOpacity="0.8" />
+          </radialGradient>
+        </defs>
+        <path d="M30 75 C10 70 5 55 10 42 C15 30 20 25 18 12 C25 22 22 32 28 38 C30 28 35 18 32 5 C42 18 45 30 42 42 C50 32 48 22 44 14 C52 28 56 42 50 58 C46 68 38 74 30 75Z"
+          fill={`url(#fg${broken})`} />
+        {/* Inner glow */}
+        <path d="M30 68 C18 64 16 52 20 42 C24 34 27 30 26 22 C32 30 28 38 32 44 C36 36 38 28 36 18 C42 28 44 40 38 50 C44 42 42 34 40 28 C46 38 48 50 42 60 C39 65 35 68 30 68Z"
+          fill={color3} opacity="0.5" />
+      </svg>
+      <div className="streak-number" style={{ color: broken ? "#93c5fd" : "#fb923c" }}>
+        {streak}
+      </div>
+      <div className="streak-label" style={{ color: broken ? "#60a5fa" : "#fdba74" }}>
+        {broken ? "🧊 Brisé hier" : streak === 0 ? "Commence!" : "🔥 Streak"}
+      </div>
+    </div>
+  );
+};
+
+// ─── TROPHY CARD ──────────────────────────────────────────────────────────────
+const TrophyCard = ({ trophy, unlocked, current }) => (
+  <div className={`trophy-card ${unlocked ? "unlocked" : "locked"} ${current ? "current-trophy" : ""}`}
+       style={unlocked ? { borderColor: trophy.color + "60", boxShadow: `0 0 20px ${trophy.color}30` } : {}}>
+    <div className="trophy-emoji">{unlocked ? trophy.emoji : "🔒"}</div>
+    <div className="trophy-name" style={unlocked ? { color: trophy.color } : {}}>{trophy.name}</div>
+    <div className="trophy-title">{trophy.title}</div>
+    <div className="trophy-streak">{trophy.streak} jours</div>
+    {current && <div className="trophy-badge">ACTIF</div>}
+  </div>
+);
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+export default function FitnessTracker() {
+  const [tab, setTab] = useState("today");
+  const [state, setState] = useState(() => loadData() || defaultState());
+  const [workoutForm, setWorkoutForm] = useState({ type: WORKOUT_TYPES[0], notes: "", km: "", calories: "", duration: "" });
+  const [showAddWorkout, setShowAddWorkout] = useState(false);
+  const [selectedWeek, setSelectedWeek] = useState(getWeekKey(today()));
+  const [notification, setNotification] = useState(null);
+  const [selectedDay, setSelectedDay] = useState(today());
+
+  // Persist
+  useEffect(() => { saveData(state); }, [state]);
+
+  // Notification helper
+  const notify = (msg, type = "success") => {
+    setNotification({ msg, type });
+    setTimeout(() => setNotification(null), 3000);
+  };
+
+  // Get today's checks
+  const todayChecks = state.dailyChecks[today()] || {};
+  const allDone = CHECKLIST_ITEMS.every(i => todayChecks[i.id]);
+
+  // Toggle a check
+  const toggleCheck = (id) => {
+    const newChecks = { ...todayChecks, [id]: !todayChecks[id] };
+    const newDaily = { ...state.dailyChecks, [today()]: newChecks };
+    const nowAllDone = CHECKLIST_ITEMS.every(i => newChecks[i.id]);
+
+    setState(prev => {
+      let newState = { ...prev, dailyChecks: newDaily };
+
+      if (nowAllDone && prev.lastCompletedDate !== today()) {
+        // Day completed!
+        const diff = daysBetween(prev.lastCompletedDate, today());
+        let newStreak = prev.streak;
+        let newBroken = false;
+
+        if (prev.lastCompletedDate === null) {
+          newStreak = 1;
+        } else if (diff === 1) {
+          // consecutive
+          newStreak = prev.flameBroken ? prev.streak + 1 : prev.streak + 1;
+          newBroken = false;
+        } else if (diff === 2) {
+          // missed 1 day → flame goes blue, but we don't reset yet
+          newStreak = prev.streak + 1;
+          newBroken = false; // they recovered
+        } else {
+          // missed 2+ days → reset
+          newStreak = 1;
+          newBroken = false;
+        }
+
+        // Check trophies
+        const newTrophies = [...prev.unlockedTrophies];
+        TROPHIES.forEach(t => {
+          if (newStreak >= t.streak && !newTrophies.includes(t.streak)) {
+            newTrophies.push(t.streak);
+            notify(`🏆 Trophée débloqué: ${t.name} — ${t.title}!`, "trophy");
+          }
+        });
+
+        newState = {
+          ...newState,
+          streak: newStreak,
+          flameBroken: newBroken,
+          lastCompletedDate: today(),
+          unlockedTrophies: newTrophies,
+        };
+
+        if (!notification) notify("✅ Journée complète! Streak +1 🔥");
+      }
+
+      return newState;
+    });
+  };
+
+  // Check if flame should be blue (missed yesterday)
+  useEffect(() => {
+    const t = today();
+    if (state.lastCompletedDate && state.lastCheckedDate !== t) {
+      const diff = daysBetween(state.lastCompletedDate, t);
+      setState(prev => {
+        let newState = { ...prev, lastCheckedDate: t };
+        if (diff >= 2) {
+          // missed 1 day = blue, missed 2+ = reset
+          if (diff === 2 && !prev.flameBroken) {
+            newState = { ...newState, flameBroken: true };
+          } else if (diff > 2) {
+            newState = { ...newState, streak: 0, flameBroken: false };
+          }
+        }
+        return newState;
+      });
+    }
+  }, []);
+
+  // Add workout
+  const addWorkout = () => {
+    if (!workoutForm.type) return;
+    const wk = getWeekKey(today());
+    const newWorkout = {
+      id: Date.now(),
+      date: today(),
+      ...workoutForm,
+      km: parseFloat(workoutForm.km) || 0,
+      calories: parseFloat(workoutForm.calories) || 0,
+      duration: parseFloat(workoutForm.duration) || 0,
+    };
+    const prevWeek = state.weeklyStats[wk] || { km: 0, calories: 0, sessions: 0 };
+    setState(prev => ({
+      ...prev,
+      workouts: [newWorkout, ...prev.workouts],
+      weeklyStats: {
+        ...prev.weeklyStats,
+        [wk]: {
+          km: prevWeek.km + newWorkout.km,
+          calories: prevWeek.calories + newWorkout.calories,
+          sessions: (prevWeek.sessions || 0) + 1,
+        }
+      }
+    }));
+    setWorkoutForm({ type: WORKOUT_TYPES[0], notes: "", km: "", calories: "", duration: "" });
+    setShowAddWorkout(false);
+    notify("💪 Séance enregistrée!");
+  };
+
+  // Current trophy
+  const currentTrophy = [...TROPHIES].reverse().find(t => state.streak >= t.streak);
+  const nextTrophy = TROPHIES.find(t => t.streak > state.streak);
+
+  // Weekly data for chart
+  const currentWeekStats = state.weeklyStats[selectedWeek] || { km: 0, calories: 0, sessions: 0 };
+  const allWeeks = Object.keys(state.weeklyStats).sort().slice(-8);
+
+  // Workouts for selected day
+  const dayWorkouts = state.workouts.filter(w => w.date === selectedDay);
+
+  // ─── RENDER ────────────────────────────────────────────────────────────────
+  return (
+    <div className="app">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Rajdhani:wght@300;400;600;700&display=swap');
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+          --bg: #020817;
+          --bg2: #0a1628;
+          --bg3: #0f1f3d;
+          --card: #0d1b35;
+          --card2: #111f3f;
+          --border: #1e3a5f;
+          --blue: #3b82f6;
+          --blue-l: #60a5fa;
+          --blue-d: #1d4ed8;
+          --accent: #1e40af;
+          --text: #e2e8f0;
+          --text2: #94a3b8;
+          --orange: #f97316;
+          --green: #22c55e;
+          --red: #ef4444;
+        }
+
+        body { background: var(--bg); color: var(--text); font-family: 'Rajdhani', sans-serif; }
+
+        .app {
+          max-width: 480px;
+          margin: 0 auto;
+          min-height: 100vh;
+          background: var(--bg);
+          position: relative;
+          overflow-x: hidden;
+        }
+
+        /* HEADER */
+        .header {
+          background: linear-gradient(180deg, #020c1f 0%, var(--bg2) 100%);
+          padding: 20px 20px 0;
+          border-bottom: 1px solid var(--border);
+          position: sticky; top: 0; z-index: 100;
+        }
+
+        .header-top {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 16px;
+        }
+
+        .logo-area {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .snake-svg { width: 50px; height: 50px; }
+
+        .logo-text {
+          font-family: 'Cinzel', serif;
+          font-size: 28px;
+          font-weight: 900;
+          background: linear-gradient(135deg, #93c5fd, #3b82f6, #1d4ed8);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          letter-spacing: 3px;
+          text-shadow: none;
+        }
+
+        .logo-sub {
+          font-size: 10px;
+          color: var(--text2);
+          letter-spacing: 2px;
+          font-weight: 600;
+          text-transform: uppercase;
+          margin-top: -2px;
+        }
+
+        /* TABS */
+        .tabs {
+          display: flex;
+          gap: 4px;
+          padding-bottom: 0;
+        }
+
+        .tab-btn {
+          flex: 1;
+          padding: 10px 4px;
+          background: transparent;
+          border: none;
+          border-bottom: 2px solid transparent;
+          color: var(--text2);
+          font-family: 'Rajdhani', sans-serif;
+          font-size: 12px;
+          font-weight: 700;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .tab-btn.active {
+          color: var(--blue-l);
+          border-bottom-color: var(--blue);
+        }
+
+        /* CONTENT */
+        .content { padding: 16px; }
+
+        /* CARDS */
+        .card {
+          background: var(--card);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          padding: 16px;
+          margin-bottom: 14px;
+        }
+
+        .card-title {
+          font-family: 'Cinzel', serif;
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--blue-l);
+          letter-spacing: 2px;
+          text-transform: uppercase;
+          margin-bottom: 14px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        /* STREAK SECTION */
+        .streak-section {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          background: linear-gradient(135deg, var(--bg3) 0%, #0a1e40 100%);
+          border: 1px solid var(--border);
+          border-radius: 16px;
+          padding: 20px;
+          margin-bottom: 14px;
+        }
+
+        .flame-container {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 4px;
+        }
+
+        .flame-svg {
+          width: 56px;
+          height: 74px;
+          filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.6));
+          animation: flicker 2s ease-in-out infinite alternate;
+        }
+
+        @keyframes flicker {
+          0% { transform: scaleX(1) scaleY(1) rotate(-1deg); filter: drop-shadow(0 0 10px rgba(249,115,22,0.5)); }
+          100% { transform: scaleX(0.97) scaleY(1.02) rotate(1deg); filter: drop-shadow(0 0 18px rgba(249,115,22,0.8)); }
+        }
+
+        .streak-number {
+          font-family: 'Cinzel', serif;
+          font-size: 36px;
+          font-weight: 900;
+          line-height: 1;
+          margin-top: -8px;
+        }
+
+        .streak-label {
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+        }
+
+        .streak-right {
+          flex: 1;
+          padding-left: 20px;
+        }
+
+        .streak-right .current-god {
+          font-family: 'Cinzel', serif;
+          font-size: 20px;
+          font-weight: 700;
+        }
+
+        .streak-right .god-title {
+          font-size: 12px;
+          color: var(--text2);
+          margin-top: 2px;
+        }
+
+        .next-trophy-bar {
+          margin-top: 10px;
+        }
+
+        .next-trophy-label {
+          font-size: 11px;
+          color: var(--text2);
+          margin-bottom: 4px;
+          display: flex;
+          justify-content: space-between;
+        }
+
+        .progress-bar {
+          height: 6px;
+          background: var(--bg);
+          border-radius: 3px;
+          overflow: hidden;
+        }
+
+        .progress-fill {
+          height: 100%;
+          background: linear-gradient(90deg, var(--blue-d), var(--blue-l));
+          border-radius: 3px;
+          transition: width 0.5s ease;
+        }
+
+        /* CHECKLIST */
+        .check-item {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 12px 14px;
+          background: var(--bg2);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          margin-bottom: 8px;
+          cursor: pointer;
+          transition: all 0.2s;
+          user-select: none;
+        }
+
+        .check-item:active { transform: scale(0.98); }
+
+        .check-item.done {
+          background: #0a2010;
+          border-color: #1a4530;
+        }
+
+        .check-icon-wrap {
+          width: 36px;
+          height: 36px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 18px;
+          background: var(--bg3);
+          border: 1px solid var(--border);
+          flex-shrink: 0;
+        }
+
+        .check-item.done .check-icon-wrap {
+          background: #14532d;
+          border-color: #22c55e;
+        }
+
+        .check-label {
+          flex: 1;
+          font-size: 15px;
+          font-weight: 600;
+          color: var(--text);
+        }
+
+        .check-item.done .check-label {
+          color: #4ade80;
+          text-decoration: line-through;
+          text-decoration-color: #22c55e60;
+        }
+
+        .check-box {
+          width: 22px;
+          height: 22px;
+          border-radius: 6px;
+          border: 2px solid var(--border);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: transparent;
+          font-size: 14px;
+          transition: all 0.2s;
+        }
+
+        .check-item.done .check-box {
+          background: var(--green);
+          border-color: var(--green);
+          color: white;
+        }
+
+        .daily-progress {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 14px;
+        }
+
+        .daily-progress .progress-bar { flex: 1; height: 8px; }
+        .daily-progress .count { font-size: 13px; font-weight: 700; color: var(--blue-l); white-space: nowrap; }
+
+        .all-done-banner {
+          background: linear-gradient(135deg, #14532d, #064e3b);
+          border: 1px solid #22c55e60;
+          border-radius: 10px;
+          padding: 14px;
+          text-align: center;
+          margin-top: 12px;
+          animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+          0%, 100% { box-shadow: 0 0 10px #22c55e30; }
+          50% { box-shadow: 0 0 25px #22c55e50; }
+        }
+
+        .all-done-banner .emoji { font-size: 32px; }
+        .all-done-banner .text { font-family: 'Cinzel', serif; font-size: 14px; color: #4ade80; margin-top: 6px; }
+
+        /* TROPHIES */
+        .trophies-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 10px;
+        }
+
+        .trophy-card {
+          background: var(--bg2);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 12px 8px;
+          text-align: center;
+          transition: all 0.2s;
+          position: relative;
+          overflow: hidden;
+        }
+
+        .trophy-card.unlocked {
+          background: linear-gradient(135deg, var(--bg3), var(--card2));
+        }
+
+        .trophy-card.current-trophy {
+          animation: trophyGlow 2s ease-in-out infinite alternate;
+        }
+
+        @keyframes trophyGlow {
+          from { box-shadow: 0 0 10px rgba(59,130,246,0.3); }
+          to { box-shadow: 0 0 25px rgba(59,130,246,0.6); }
+        }
+
+        .trophy-card.locked { opacity: 0.5; filter: grayscale(1); }
+
+        .trophy-emoji { font-size: 24px; margin-bottom: 4px; }
+        .trophy-name { font-family: 'Cinzel', serif; font-size: 11px; font-weight: 700; }
+        .trophy-title { font-size: 9px; color: var(--text2); margin-top: 2px; line-height: 1.3; }
+        .trophy-streak { font-size: 10px; font-weight: 700; color: var(--blue); margin-top: 4px; }
+
+        .trophy-badge {
+          position: absolute;
+          top: 4px; right: 4px;
+          background: var(--blue);
+          color: white;
+          font-size: 7px;
+          font-weight: 700;
+          padding: 2px 4px;
+          border-radius: 3px;
+          letter-spacing: 0.5px;
+        }
+
+        /* WORKOUT LOG */
+        .add-btn {
+          width: 100%;
+          padding: 14px;
+          background: linear-gradient(135deg, var(--blue-d), var(--blue));
+          border: none;
+          border-radius: 10px;
+          color: white;
+          font-family: 'Rajdhani', sans-serif;
+          font-size: 16px;
+          font-weight: 700;
+          letter-spacing: 1px;
+          cursor: pointer;
+          transition: all 0.2s;
+          margin-bottom: 14px;
+          text-transform: uppercase;
+        }
+
+        .add-btn:active { transform: scale(0.98); opacity: 0.9; }
+
+        .workout-form {
+          background: var(--bg2);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          padding: 16px;
+          margin-bottom: 14px;
+        }
+
+        .form-row { margin-bottom: 12px; }
+        .form-label {
+          font-size: 11px;
+          font-weight: 700;
+          color: var(--blue-l);
+          letter-spacing: 1px;
+          text-transform: uppercase;
+          margin-bottom: 6px;
+          display: block;
+        }
+
+        .form-input, .form-select {
+          width: 100%;
+          background: var(--bg3);
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          padding: 10px 12px;
+          color: var(--text);
+          font-family: 'Rajdhani', sans-serif;
+          font-size: 15px;
+          outline: none;
+          transition: border-color 0.2s;
+        }
+
+        .form-input:focus, .form-select:focus { border-color: var(--blue); }
+
+        .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+        .form-btns { display: flex; gap: 10px; margin-top: 14px; }
+
+        .btn-cancel {
+          flex: 1;
+          padding: 12px;
+          background: var(--bg3);
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          color: var(--text2);
+          font-family: 'Rajdhani', sans-serif;
+          font-size: 15px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+
+        .btn-save {
+          flex: 2;
+          padding: 12px;
+          background: var(--blue);
+          border: none;
+          border-radius: 8px;
+          color: white;
+          font-family: 'Rajdhani', sans-serif;
+          font-size: 15px;
+          font-weight: 700;
+          cursor: pointer;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+        }
+
+        /* WORKOUT CARD */
+        .workout-item {
+          background: var(--bg2);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 14px;
+          margin-bottom: 10px;
+        }
+
+        .workout-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 8px;
+        }
+
+        .workout-type {
+          font-family: 'Cinzel', serif;
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--blue-l);
+        }
+
+        .workout-date {
+          font-size: 11px;
+          color: var(--text2);
+          font-weight: 600;
+        }
+
+        .workout-stats {
+          display: flex;
+          gap: 16px;
+        }
+
+        .workout-stat { text-align: center; }
+        .workout-stat .val { font-size: 18px; font-weight: 700; color: var(--text); }
+        .workout-stat .unit { font-size: 10px; color: var(--text2); font-weight: 600; letter-spacing: 0.5px; }
+
+        .workout-notes { font-size: 13px; color: var(--text2); margin-top: 8px; font-style: italic; }
+
+        /* STATS */
+        .stats-week {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 10px;
+          margin-bottom: 14px;
+        }
+
+        .stat-box {
+          background: var(--bg2);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 14px 10px;
+          text-align: center;
+        }
+
+        .stat-box .val { font-size: 26px; font-weight: 700; font-family: 'Cinzel', serif; color: var(--blue-l); }
+        .stat-box .lbl { font-size: 10px; color: var(--text2); font-weight: 600; letter-spacing: 1px; text-transform: uppercase; margin-top: 2px; }
+
+        /* CHART */
+        .chart-area {
+          background: var(--bg2);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          padding: 16px;
+          margin-bottom: 14px;
+        }
+
+        .chart-bars {
+          display: flex;
+          align-items: flex-end;
+          gap: 6px;
+          height: 100px;
+          margin-bottom: 8px;
+        }
+
+        .chart-bar-wrap {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 4px;
+          height: 100%;
+          justify-content: flex-end;
+        }
+
+        .chart-bar {
+          width: 100%;
+          border-radius: 4px 4px 0 0;
+          min-height: 4px;
+          transition: height 0.5s ease;
+          background: linear-gradient(180deg, var(--blue-l), var(--blue-d));
+          cursor: pointer;
+        }
+
+        .chart-bar.selected {
+          background: linear-gradient(180deg, #60a5fa, #f97316);
+          box-shadow: 0 0 10px rgba(249,115,22,0.4);
+        }
+
+        .chart-week-label {
+          font-size: 9px;
+          color: var(--text2);
+          font-weight: 600;
+          text-align: center;
+        }
+
+        /* CALENDAR */
+        .calendar-grid {
+          display: grid;
+          grid-template-columns: repeat(7, 1fr);
+          gap: 4px;
+          margin-bottom: 14px;
+        }
+
+        .cal-day-header {
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--text2);
+          text-align: center;
+          padding: 4px 0;
+          letter-spacing: 0.5px;
+        }
+
+        .cal-day {
+          aspect-ratio: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 6px;
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.15s;
+          position: relative;
+          border: 1px solid transparent;
+        }
+
+        .cal-day.today { border-color: var(--blue); color: var(--blue-l); }
+        .cal-day.has-workout { background: var(--bg3); color: var(--blue-l); }
+        .cal-day.completed { background: #0a2a10; color: #4ade80; }
+        .cal-day.selected { border-color: var(--orange); }
+        .cal-day.other-month { opacity: 0.3; }
+        .cal-dot { position: absolute; bottom: 2px; width: 4px; height: 4px; border-radius: 50%; background: var(--blue); }
+
+        /* WEEK SELECTOR */
+        .week-selector {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 14px;
+        }
+
+        .week-nav {
+          background: var(--bg3);
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          padding: 8px 14px;
+          color: var(--blue-l);
+          font-size: 18px;
+          cursor: pointer;
+          border: none;
+        }
+
+        .week-label { font-family: 'Cinzel', serif; font-size: 14px; font-weight: 700; color: var(--text); }
+
+        /* NOTIFICATION */
+        .notification {
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: var(--bg3);
+          border: 1px solid var(--blue);
+          border-radius: 10px;
+          padding: 12px 20px;
+          font-size: 14px;
+          font-weight: 700;
+          color: var(--text);
+          z-index: 1000;
+          box-shadow: 0 4px 20px rgba(59,130,246,0.3);
+          animation: slideDown 0.3s ease;
+          white-space: nowrap;
+        }
+
+        .notification.trophy {
+          border-color: var(--orange);
+          box-shadow: 0 4px 20px rgba(249,115,22,0.4);
+        }
+
+        @keyframes slideDown {
+          from { transform: translateX(-50%) translateY(-20px); opacity: 0; }
+          to { transform: translateX(-50%) translateY(0); opacity: 1; }
+        }
+
+        /* DAY DETAIL */
+        .day-detail {
+          background: var(--bg2);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 14px;
+          margin-bottom: 14px;
+        }
+
+        .day-detail-title {
+          font-family: 'Cinzel', serif;
+          font-size: 12px;
+          color: var(--blue-l);
+          font-weight: 700;
+          letter-spacing: 1px;
+          margin-bottom: 10px;
+        }
+
+        .no-data { color: var(--text2); font-size: 13px; text-align: center; padding: 10px 0; }
+
+        .divider { height: 1px; background: var(--border); margin: 14px 0; }
+
+        .tab-icon { font-size: 16px; }
+      `}</style>
+
+      {/* NOTIFICATION */}
+      {notification && (
+        <div className={`notification ${notification.type}`}>{notification.msg}</div>
+      )}
+
+      {/* HEADER */}
+      <div className="header">
+        <div className="header-top">
+          <div className="logo-area">
+            <SnakeLogo />
+            <div>
+              <div className="logo-text">AC</div>
+              <div className="logo-sub">Fitness Tracker</div>
+            </div>
+          </div>
+          <Flame streak={state.streak} broken={state.flameBroken} />
+        </div>
+        <div className="tabs">
+          {[
+            { id: "today", label: "Aujourd'hui", icon: "📋" },
+            { id: "log", label: "Séances", icon: "🏋️" },
+            { id: "stats", label: "Stats", icon: "📊" },
+            { id: "trophies", label: "Trophées", icon: "🏆" },
+          ].map(t => (
+            <button key={t.id} className={`tab-btn ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
+              <span className="tab-icon">{t.icon}</span><br/>{t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="content">
+
+        {/* ── TODAY ── */}
+        {tab === "today" && (
+          <>
+            {/* Current trophy */}
+            {currentTrophy && (
+              <div className="streak-section">
+                <Flame streak={state.streak} broken={state.flameBroken} />
+                <div className="streak-right">
+                  <div className="current-god" style={{ color: currentTrophy.color }}>
+                    {currentTrophy.emoji} {currentTrophy.name}
+                  </div>
+                  <div className="god-title">{currentTrophy.title}</div>
+                  {nextTrophy && (
+                    <div className="next-trophy-bar">
+                      <div className="next-trophy-label">
+                        <span>Prochain: {nextTrophy.name}</span>
+                        <span>{state.streak}/{nextTrophy.streak}</span>
+                      </div>
+                      <div className="progress-bar">
+                        <div className="progress-fill"
+                          style={{ width: `${Math.min(100, (state.streak / nextTrophy.streak) * 100)}%` }} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Date */}
+            <div className="card-title" style={{ marginBottom: 12 }}>
+              📅 {new Date().toLocaleDateString("fr-CA", { weekday: "long", month: "long", day: "numeric" })}
+            </div>
+
+            {/* Progress */}
+            <div className="daily-progress">
+              <div className="progress-bar" style={{ flex: 1, height: 8 }}>
+                <div className="progress-fill"
+                  style={{ width: `${(Object.values(todayChecks).filter(Boolean).length / CHECKLIST_ITEMS.length) * 100}%` }} />
+              </div>
+              <div className="count">{Object.values(todayChecks).filter(Boolean).length}/{CHECKLIST_ITEMS.length}</div>
+            </div>
+
+            {/* Checklist */}
+            {CHECKLIST_ITEMS.map(item => (
+              <div key={item.id} className={`check-item ${todayChecks[item.id] ? "done" : ""}`}
+                   onClick={() => toggleCheck(item.id)}>
+                <div className="check-icon-wrap">{item.icon}</div>
+                <div className="check-label">{item.label}</div>
+                <div className="check-box">{todayChecks[item.id] ? "✓" : ""}</div>
+              </div>
+            ))}
+
+            {allDone && (
+              <div className="all-done-banner">
+                <div className="emoji">🏆</div>
+                <div className="text">JOURNÉE PARFAITE — STREAK +1!</div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── LOG ── */}
+        {tab === "log" && (
+          <>
+            <button className="add-btn" onClick={() => setShowAddWorkout(!showAddWorkout)}>
+              {showAddWorkout ? "✕ Annuler" : "+ Enregistrer une séance"}
+            </button>
+
+            {showAddWorkout && (
+              <div className="workout-form">
+                <div className="form-row">
+                  <label className="form-label">Type de séance</label>
+                  <select className="form-select" value={workoutForm.type}
+                    onChange={e => setWorkoutForm(p => ({ ...p, type: e.target.value }))}>
+                    {WORKOUT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div className="form-row-2">
+                  <div className="form-row">
+                    <label className="form-label">⏱ Durée (min)</label>
+                    <input className="form-input" type="number" placeholder="45"
+                      value={workoutForm.duration}
+                      onChange={e => setWorkoutForm(p => ({ ...p, duration: e.target.value }))} />
+                  </div>
+                  <div className="form-row">
+                    <label className="form-label">📍 KM</label>
+                    <input className="form-input" type="number" placeholder="0" step="0.1"
+                      value={workoutForm.km}
+                      onChange={e => setWorkoutForm(p => ({ ...p, km: e.target.value }))} />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <label className="form-label">🔥 Calories</label>
+                  <input className="form-input" type="number" placeholder="350"
+                    value={workoutForm.calories}
+                    onChange={e => setWorkoutForm(p => ({ ...p, calories: e.target.value }))} />
+                </div>
+                <div className="form-row">
+                  <label className="form-label">📝 Notes</label>
+                  <input className="form-input" type="text" placeholder="Exercices, sensations..."
+                    value={workoutForm.notes}
+                    onChange={e => setWorkoutForm(p => ({ ...p, notes: e.target.value }))} />
+                </div>
+                <div className="form-btns">
+                  <button className="btn-cancel" onClick={() => setShowAddWorkout(false)}>Annuler</button>
+                  <button className="btn-save" onClick={addWorkout}>💾 Sauvegarder</button>
+                </div>
+              </div>
+            )}
+
+            {state.workouts.length === 0 ? (
+              <div className="card"><div className="no-data">Aucune séance enregistrée. Commence!</div></div>
+            ) : (
+              state.workouts.map(w => (
+                <div key={w.id} className="workout-item">
+                  <div className="workout-header">
+                    <div className="workout-type">🏋️ {w.type}</div>
+                    <div className="workout-date">{formatDate(w.date)}</div>
+                  </div>
+                  <div className="workout-stats">
+                    {w.duration > 0 && <div className="workout-stat"><div className="val">{w.duration}</div><div className="unit">MIN</div></div>}
+                    {w.km > 0 && <div className="workout-stat"><div className="val">{w.km}</div><div className="unit">KM</div></div>}
+                    {w.calories > 0 && <div className="workout-stat"><div className="val">{w.calories}</div><div className="unit">CAL</div></div>}
+                  </div>
+                  {w.notes && <div className="workout-notes">"{w.notes}"</div>}
+                </div>
+              ))
+            )}
+          </>
+        )}
+
+        {/* ── STATS ── */}
+        {tab === "stats" && (
+          <>
+            <div className="card-title">📊 Semaine en cours</div>
+            <div className="stats-week">
+              <div className="stat-box">
+                <div className="val">{currentWeekStats.sessions || 0}</div>
+                <div className="lbl">Séances</div>
+              </div>
+              <div className="stat-box">
+                <div className="val">{(currentWeekStats.km || 0).toFixed(1)}</div>
+                <div className="lbl">KM Total</div>
+              </div>
+              <div className="stat-box">
+                <div className="val">{currentWeekStats.calories || 0}</div>
+                <div className="lbl">Calories</div>
+              </div>
+            </div>
+
+            {/* Chart - calories by week */}
+            {allWeeks.length > 0 && (
+              <div className="chart-area">
+                <div className="card-title">🔥 Calories / Semaine</div>
+                <div className="chart-bars">
+                  {allWeeks.map(wk => {
+                    const wStats = state.weeklyStats[wk] || {};
+                    const maxCal = Math.max(...allWeeks.map(w => state.weeklyStats[w]?.calories || 0), 1);
+                    const pct = ((wStats.calories || 0) / maxCal) * 90;
+                    return (
+                      <div key={wk} className="chart-bar-wrap" onClick={() => setSelectedWeek(wk)}>
+                        <div className={`chart-bar ${selectedWeek === wk ? "selected" : ""}`}
+                             style={{ height: `${Math.max(pct, 4)}%` }} />
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {allWeeks.map(wk => (
+                    <div key={wk} className="chart-week-label" style={{ flex: 1 }}>
+                      {wk.split("-W")[1] ? `S${wk.split("-W")[1]}` : ""}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Calendar */}
+            <div className="card-title">📅 Calendrier des séances</div>
+            {(() => {
+              const now = new Date();
+              const year = now.getFullYear();
+              const month = now.getMonth();
+              const firstDay = new Date(year, month, 1).getDay();
+              const daysInMonth = new Date(year, month + 1, 0).getDate();
+              const days = [];
+              const dayNames = ["Di", "Lu", "Ma", "Me", "Je", "Ve", "Sa"];
+
+              dayNames.forEach(d => days.push({ type: "header", label: d }));
+              for (let i = 0; i < firstDay; i++) days.push({ type: "empty" });
+              for (let d = 1; d <= daysInMonth; d++) {
+                const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+                const hasWorkout = state.workouts.some(w => w.date === dateStr);
+                const completed = state.dailyChecks[dateStr] &&
+                  CHECKLIST_ITEMS.every(i => state.dailyChecks[dateStr][i.id]);
+                days.push({ type: "day", d, dateStr, hasWorkout, completed, isToday: dateStr === today() });
+              }
+
+              return (
+                <div className="calendar-grid">
+                  {days.map((day, i) => {
+                    if (day.type === "header") return <div key={`h${i}`} className="cal-day-header">{day.label}</div>;
+                    if (day.type === "empty") return <div key={`e${i}`} />;
+                    return (
+                      <div key={day.dateStr}
+                        className={`cal-day ${day.isToday ? "today" : ""} ${day.hasWorkout ? "has-workout" : ""} ${day.completed ? "completed" : ""} ${selectedDay === day.dateStr ? "selected" : ""}`}
+                        onClick={() => setSelectedDay(day.dateStr)}>
+                        {day.d}
+                        {day.hasWorkout && <div className="cal-dot" />}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
+            {/* Day detail */}
+            <div className="day-detail">
+              <div className="day-detail-title">📍 {formatDate(selectedDay)}</div>
+              {dayWorkouts.length === 0 ? (
+                <div className="no-data">Aucune séance ce jour</div>
+              ) : (
+                dayWorkouts.map(w => (
+                  <div key={w.id} style={{ marginBottom: 8 }}>
+                    <div className="workout-type">{w.type}</div>
+                    <div className="workout-stats" style={{ marginTop: 6 }}>
+                      {w.duration > 0 && <div className="workout-stat"><div className="val">{w.duration}</div><div className="unit">MIN</div></div>}
+                      {w.km > 0 && <div className="workout-stat"><div className="val">{w.km}</div><div className="unit">KM</div></div>}
+                      {w.calories > 0 && <div className="workout-stat"><div className="val">{w.calories}</div><div className="unit">CAL</div></div>}
+                    </div>
+                    {w.notes && <div className="workout-notes">"{w.notes}"</div>}
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Total all time */}
+            <div className="card-title">🏆 Total cumulatif</div>
+            <div className="stats-week">
+              <div className="stat-box">
+                <div className="val">{state.workouts.length}</div>
+                <div className="lbl">Séances</div>
+              </div>
+              <div className="stat-box">
+                <div className="val">{state.workouts.reduce((s, w) => s + (w.km || 0), 0).toFixed(0)}</div>
+                <div className="lbl">KM Total</div>
+              </div>
+              <div className="stat-box">
+                <div className="val">{state.workouts.reduce((s, w) => s + (w.calories || 0), 0)}</div>
+                <div className="lbl">Cal Total</div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── TROPHIES ── */}
+        {tab === "trophies" && (
+          <>
+            <div className="card-title">⚡ Panthéon des Dieux</div>
+            <div style={{ marginBottom: 16, background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 13, color: "var(--text2)", lineHeight: 1.6 }}>
+                Ton streak actuel: <span style={{ color: "var(--blue-l)", fontWeight: 700, fontSize: 16 }}>{state.streak} jours 🔥</span>
+                <br />
+                {nextTrophy
+                  ? `Plus que ${nextTrophy.streak - state.streak} jours pour atteindre ${nextTrophy.name}!`
+                  : "Tu as atteint le niveau maximum — Chronos t'attend!"}
+              </div>
+            </div>
+            <div className="trophies-grid">
+              {TROPHIES.map(t => (
+                <TrophyCard key={t.streak} trophy={t}
+                  unlocked={state.unlockedTrophies.includes(t.streak) || state.streak >= t.streak}
+                  current={currentTrophy?.streak === t.streak} />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
